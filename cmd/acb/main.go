@@ -6,7 +6,7 @@ import (
 	"os"
 	"os/signal"
 
-	"github.com/takaishi/my_go_cli_example"
+	"github.com/takaishi/acb/cmd"
 )
 
 var Version = "dev"
@@ -21,7 +21,7 @@ func main() {
 	ctx := context.TODO()
 	ctx, stop := signal.NotifyContext(ctx, []os.Signal{os.Interrupt}...)
 	defer stop()
-	if err := my_go_cli_example.RunCLI(ctx, os.Args[1:]); err != nil {
+	if err := cmd.RunCLI(ctx, os.Args[1:]); err != nil {
 		log.Printf("error: %v", err)
 		os.Exit(1)
 	}
