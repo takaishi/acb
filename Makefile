@@ -1,11 +1,34 @@
-.PHONY: build
+BINARY_NAME=acb
+BINARY_DIR=dist
+
+.PHONY: all build clean test
+
+all: clean build
+
 build:
-	go build -o dist/my_go_cli_example ./cmd/my_go_cli_example
+	@echo "Building..."
+	@mkdir -p $(BINARY_DIR)
+	@go build -o $(BINARY_DIR)/$(BINARY_NAME) ./cmd/acb
 
-.PHONY: install
-install:
-	go install github.com/takaishi/my_go_cli_example/cmd/my_go_cli_example
+clean:
+	@echo "Cleaning..."
+	@rm -rf $(BINARY_DIR)
+	@rm -rf tmp
 
-.PHONY: test
 test:
-	go test -race ./...
+	@echo "Running tests..."
+	@go test -v ./...
+
+lint:
+	@echo "Running linter..."
+	@go vet ./...
+	@test -z "$$(gofmt -l .)"
+
+.PHONY: help
+help:
+	@echo "Available commands:"
+	@echo "  make build    - Build the binary"
+	@echo "  make clean    - Remove build artifacts"
+	@echo "  make test     - Run tests"
+	@echo "  make lint     - Run linter"
+	@echo "  make all      - Clean and build"
