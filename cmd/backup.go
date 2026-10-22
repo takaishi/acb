@@ -107,7 +107,7 @@ func Backup(cli *CLI) error {
 	}
 
 	// Execute backup
-	backupper := backup.NewPoolBackupper(cognitoClient, store)
+	backupper := backup.NewPoolBackupper(cognitoClient, store, cli.Backup.PoolConcurrency, cli.Backup.UserConcurrency)
 	if err := backupper.BackupPools(ctx, cli.Backup.Pattern, info.path); err != nil {
 		return fmt.Errorf("backup failed: %w", err)
 	}
