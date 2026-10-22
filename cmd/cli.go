@@ -16,11 +16,13 @@ type GlobalOptions struct {
 
 type CLI struct {
 	Backup struct {
-		Pattern     string `help:"Regular expression pattern to filter user pools" default:".*"`
-		URI         string `help:"Backup destination URI (e.g., s3://bucket/prefix/file.tar.gz or file:///path/to/backup.tar.gz)" required:""`
-		KMSRegion   string `help:"KMS region (e.g., ap-northeast-1)" default:"ap-northeast-1"`
-		KMSKeyID    string `help:"KMS key ID (e.g., alias/my-key or arn:aws:kms:region:account:key/key-id)" and:"KMSKeyID,DataKeyPath"`
-		DataKeyPath string `help:"Data key file path (e.g., file:///path/to/datakey.json)" and:"KMSKeyID,DataKeyPath"`
+		Pattern         string `help:"Regular expression pattern to filter user pools" default:".*"`
+		URI             string `help:"Backup destination URI (e.g., s3://bucket/prefix/file.tar.gz or file:///path/to/backup.tar.gz)" required:""`
+		KMSRegion       string `help:"KMS region (e.g., ap-northeast-1)" default:"ap-northeast-1"`
+		KMSKeyID        string `help:"KMS key ID (e.g., alias/my-key or arn:aws:kms:region:account:key/key-id)" and:"KMSKeyID,DataKeyPath"`
+		DataKeyPath     string `help:"Data key file path (e.g., file:///path/to/datakey.json)" and:"KMSKeyID,DataKeyPath"`
+		PoolConcurrency int    `help:"Number of user pools to back up concurrently" default:"4"`
+		UserConcurrency int    `help:"Number of users per pool to fetch groups for concurrently" default:"8"`
 	} `cmd:"" help:"Backup Cognito user pools"`
 
 	List struct {

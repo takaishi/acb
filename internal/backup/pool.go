@@ -11,17 +11,35 @@ import (
 	"github.com/takaishi/acb/pkg/types"
 )
 
+const (
+	// DefaultPoolConcurrency is the default number of user pools backed up concurrently.
+	DefaultPoolConcurrency = 4
+	// DefaultUserConcurrency is the default number of users per pool whose groups are fetched concurrently.
+	DefaultUserConcurrency = 8
+)
+
 // PoolBackupper はユーザープールのバックアップを行う
 type PoolBackupper struct {
-	cognitoClient *aws.CognitoClient
-	storage       storage.Storage
+	cognitoClient   *aws.CognitoClient
+	storage         storage.Storage
+	poolConcurrency int
+	userConcurrency int
 }
 
 // NewPoolBackupper は新しいPoolBackupperを作成する
-func NewPoolBackupper(cognitoClient *aws.CognitoClient, storage storage.Storage) *PoolBackupper {
+// If poolConcurrency or userConcurrency is less than 1, the default is used.
+func NewPoolBackupper(cognitoClient *aws.CognitoClient, storage storage.Storage, poolConcurrency, userConcurrency int) *PoolBackupper {
+	if poolConcurrency < 1 {
+		poolConcurrency = DefaultPoolConcurrency
+	}
+	if userConcurrency < 1 {
+		userConcurrency = DefaultUserConcurrency
+	}
 	return &PoolBackupper{
-		cognitoClient: cognitoClient,
-		storage:       storage,
+		cognitoClient:   cognitoClient,
+		storage:         storage,
+		poolConcurrency: poolConcurrency,
+		userConcurrency: userConcurrency,
 	}
 }
 
@@ -40,12 +58,16 @@ func (b *PoolBackupper) BackupPools(ctx context.Context, pattern, prefix string)
 	// 並行処理用のエラーチャネル
 	errCh := make(chan error, len(pools))
 	var wg sync.WaitGroup
+	// Processing all pools at once gets throttled, so limit how many run concurrently.
+	sem := make(chan struct{}, b.poolConcurrency)
 
 	// 各ユーザープールを並行してバックアップ
 	for _, pool := range pools {
 		wg.Add(1)
 		go func(pool string) {
 			defer wg.Done()
+			sem <- struct{}{}
+			defer func() { <-sem }()
 			if err := b.backupSinglePool(ctx, pool, prefix); err != nil {
 				errCh <- fmt.Errorf("failed to backup user pool %s: %w", pool, err)
 			}
@@ -84,29 +106,60 @@ func (b *PoolBackupper) backupSinglePool(ctx context.Context, userPoolID, prefix
 	}
 
 	// ユーザー情報の詳細を取得
-	var usersBackup types.UsersBackup
-	for _, user := range users {
-		groups, err := b.cognitoClient.ListUserGroups(ctx, userPoolID, *user.Username)
-		if err != nil {
-			return fmt.Errorf("failed to get user groups: %w", err)
-		}
+	// AdminListGroupsForUser is called per user, so calling it sequentially takes time proportional
+	// to the number of users. Call it with userConcurrency workers and keep the original order.
+	usersBackup := types.UsersBackup{Users: make([]types.UserInfo, len(users))}
+	jobs := make(chan int)
+	errCh := make(chan error, b.userConcurrency)
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	var wg sync.WaitGroup
+	for w := 0; w < b.userConcurrency; w++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for i := range jobs {
+				user := users[i]
+				groups, err := b.cognitoClient.ListUserGroups(ctx, userPoolID, *user.Username)
+				if err != nil {
+					errCh <- fmt.Errorf("failed to get user groups: %w", err)
+					cancel()
+					return
+				}
 
-		userInfo := types.UserInfo{
-			Username: *user.Username,
-			Groups:   groups,
-		}
+				// Convert attributes
+				attributes := make([]map[string]interface{}, len(user.Attributes))
+				for j, attr := range user.Attributes {
+					attributes[j] = map[string]interface{}{
+						"Name":  *attr.Name,
+						"Value": *attr.Value,
+					}
+				}
 
-		// 属性の変換
-		attributes := make([]map[string]interface{}, len(user.Attributes))
-		for i, attr := range user.Attributes {
-			attributes[i] = map[string]interface{}{
-				"Name":  *attr.Name,
-				"Value": *attr.Value,
+				usersBackup.Users[i] = types.UserInfo{
+					Username:   *user.Username,
+					Groups:     groups,
+					Attributes: attributes,
+				}
 			}
+		}()
+	}
+feed:
+	for i := range users {
+		select {
+		case jobs <- i:
+		case <-ctx.Done():
+			break feed
 		}
-		userInfo.Attributes = attributes
-
-		usersBackup.Users = append(usersBackup.Users, userInfo)
+	}
+	close(jobs)
+	wg.Wait()
+	close(errCh)
+	if err := <-errCh; err != nil {
+		return err
+	}
+	if err := ctx.Err(); err != nil {
+		return err
 	}
 
 	// メタデータの作成

@@ -4,7 +4,11 @@ import (
 	"context"
 	"fmt"
 	"regexp"
+	"time"
 
+	awssdk "github.com/aws/aws-sdk-go-v2/aws"
+	"github.com/aws/aws-sdk-go-v2/aws/ratelimit"
+	"github.com/aws/aws-sdk-go-v2/aws/retry"
 	"github.com/aws/aws-sdk-go-v2/config"
 	cognito "github.com/aws/aws-sdk-go-v2/service/cognitoidentityprovider"
 	"github.com/aws/aws-sdk-go-v2/service/cognitoidentityprovider/types"
@@ -15,11 +19,37 @@ type CognitoClient struct {
 	client *cognito.Client
 }
 
+const (
+	// defaultMaxAttempts is the max number of attempts used when AWS_MAX_ATTEMPTS and the like are not set.
+	defaultMaxAttempts = 10
+	// maxBackoff is the upper bound of the delay between retries.
+	maxBackoff = 20 * time.Second
+)
+
 // NewCognitoClient は新しいCognitoClientを作成する
+//
+// Processing many user pools and users concurrently gets throttled by Cognito.
+// The SDK's default retryer has a client-wide retry quota; under sustained throttling it runs out and
+// requests fail without retrying ("retry quota exceeded"). The quota cannot be changed with environment
+// variables, so it is disabled here. Adaptive mode slows the client down when it is throttled instead.
 func NewCognitoClient(ctx context.Context) (*CognitoClient, error) {
 	cfg, err := config.LoadDefaultConfig(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("failed to load AWS configuration: %w", err)
+	}
+
+	maxAttempts := cfg.RetryMaxAttempts
+	if maxAttempts == 0 {
+		maxAttempts = defaultMaxAttempts
+	}
+	cfg.Retryer = func() awssdk.Retryer {
+		return retry.NewAdaptiveMode(func(o *retry.AdaptiveModeOptions) {
+			o.StandardOptions = append(o.StandardOptions, func(so *retry.StandardOptions) {
+				so.MaxAttempts = maxAttempts
+				so.MaxBackoff = maxBackoff
+				so.RateLimiter = ratelimit.None
+			})
+		})
 	}
 
 	return &CognitoClient{
